@@ -1,5 +1,5 @@
 const express = require('express');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID } = require('crypto');
 const { login, fetchAllData } = require('../cuims/scraper');
 
 const router = express.Router();
@@ -33,7 +33,7 @@ router.post('/login', async (req, res) => {
     const data = await fetchAllData(cuimsSession);
 
     // Step 3: Create session token
-    const token = uuidv4();
+    const token = randomUUID();
     sessions.set(token, {
       cuimsSession,
       data,
