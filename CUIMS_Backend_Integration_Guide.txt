@@ -1,0 +1,65 @@
+CUIMS BACKEND INTEGRATION GUIDE
+================================
+
+This document is designed for another AI agent or developer to understand how the CUIMS (Chandigarh University Information Management System) backend scraper works so it can be integrated into another application.
+
+1. TECHNOLOGY STACK
+-------------------
+- Node.js & Express (Server & Routing)
+- Axios + tough-cookie + axios-cookiejar-support (Session & Cookie management)
+- Cheerio (HTML Parsing)
+- Tesseract.js & Sharp (Auto-Captcha solving)
+
+2. CORE MECHANICS & ASP.NET WEBFORMS
+------------------------------------
+The CUIMS portal is built on older ASP.NET WebForms. This means it relies heavily on hidden fields to maintain state. 
+For EVERY POST request (like login, fetching marks, etc.), the scraper MUST extract the following hidden fields from the previous GET request and include them in the form data:
+- __VIEWSTATE
+- __VIEWSTATEGENERATOR
+- __EVENTVALIDATION
+Failure to include these will result in a 500 server error or a rejected request.
+
+3. THE SCRAPING MODULE (`server/cuims/scraper.js`)
+--------------------------------------------------
+This file contains the core logic for communicating with CUIMS.
+- login(uid, password):
+  1. GETs the base URL (`/`) to fetch the initial VIEWSTATE.
+  2. POSTs the UID to transition to the password step.
+  3. GETs the password page.
+  4. Downloads the captcha image from `#imgCaptcha`.
+  5. Passes the image buffer to `captcha.js` which uses `sharp` to binarize/clean the image, and `Tesseract.js` to read the text.
+  6. POSTs the password + captcha text. If it fails due to a wrong captcha, it recursively retries up to 5 times.
+  7. Upon success, it returns an authenticated session object containing the cookie jar.
+
+- getAttendance(session):
+  Fetches `frmStudentCourseWiseAttendanceSummary.aspx`. It uses a regex: `getReport\('([^']+)',\s*'([^']+)'\)` to extract the `ReportID` and `SessionID` from an inline Javascript function, and then makes an AJAX POST to `frmStudentCourseWiseAttendanceSummary.aspx/GetReport` with `{UID: reportId, Session: sessionId}` to get JSON data.
+
+- getMarksAllSessions(session):
+  Fetches `frmStudentMarksView.aspx`. It finds all available sessions in the dropdown `select[name="...ddlCAndPSession"]`. For each session, it POSTs back to the same page with the session value and extracts subjects and marks from the `#accordion` element.
+
+- getTimetable(session):
+  Fetches `frmMyTimeTable.aspx`. The timetable is located inside a table with the ID `#grdMain`. It parses the headers to get the days, and maps the rows to time slots.
+
+4. EXPRESS API ENDPOINTS (`server/routes/`)
+-------------------------------------------
+The backend exposes these REST endpoints to the frontend:
+
+- POST `/api/login`
+  Body: `{ "uid": "...", "password": "..." }`
+  Behavior: Logs into CUIMS, immediately fetches Profile, Attendance, Marks, and Timetable in parallel (`fetchAllData`), generates a random UUID session token, caches the data in memory, and returns it.
+  Returns: `{ success: true, token: "uuid", data: { profile, attendance, marks, timetable } }`
+
+- POST `/api/logout`
+  Headers: `x-session-token: <token>`
+  Behavior: Deletes the session from server memory.
+
+- GET `/api/refresh`
+  Headers: `x-session-token: <token>`
+  Behavior: Uses the active CUIMS cookies to re-scrape the data and returns the fresh data to the frontend.
+
+5. HOW TO PORT THIS TO ANOTHER APP
+----------------------------------
+1. Copy the `server/cuims/` directory (which contains `session.js`, `scraper.js`, and `captcha.js`).
+2. Make sure you install the necessary dependencies: `npm install axios tough-cookie axios-cookiejar-support cheerio tesseract.js sharp`
+3. Use the `login()` function to authenticate. Once authenticated, pass the returned `session` object to any of the data-fetching functions.
+4. (Optional) Re-implement the Express routes in your new app's backend framework of choice.
